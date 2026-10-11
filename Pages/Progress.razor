@@ -1,0 +1,207 @@
+﻿@page "/progress"
+@inject PracticeResultService PracticeResultService
+
+<PageTitle>Progress</PageTitle>
+
+<h1>Progress</h1>
+
+@if (!_isLoaded)
+{
+    <p>Loading progress...</p>
+}
+else if (_results.Count == 0)
+{
+    <div class="card p-4" style="max-width: 800px;">
+        <h4>No practice results yet</h4>
+        <p>
+            Complete a few questions in Practice, and your statistics will appear here.
+        </p>
+
+        <NavLink class="btn btn-primary" href="practice">
+            Go to Practice
+        </NavLink>
+    </div>
+}
+else
+{
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card p-3">
+                <h5>Total answers</h5>
+                <p class="fs-3">@_totalAnswers</p>
+            </div>
+        </div>
+
+        <div class="col-md-3">
+            <div class="card p-3">
+                <h5>Correct</h5>
+                <p class="fs-3 text-success">@_correctAnswers</p>
+            </div>
+        </div>
+
+        <div class="col-md-3">
+            <div class="card p-3">
+                <h5>Wrong</h5>
+                <p class="fs-3 text-danger">@_wrongAnswers</p>
+            </div>
+        </div>
+
+        <div class="col-md-3">
+            <div class="card p-3">
+                <h5>Accuracy</h5>
+                <p class="fs-3">@_accuracy%</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="card p-4 mb-4" style="max-width: 900px;">
+        <h4>Most difficult words</h4>
+
+        @if (_difficultWords.Count == 0)
+        {
+            <p>No difficult words yet. Great job!</p>
+        }
+        else
+        {
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Word</th>
+                        <th>Wrong answers</th>
+                        <th>Total answers</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in _difficultWords)
+                    {
+                        <tr>
+                            <td>@item.English</td>
+                            <td>@item.WrongCount</td>
+                            <td>@item.TotalCount</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+
+    <div class="card p-4" style="max-width: 900px;">
+        <h4>Last answers</h4>
+
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Mode</th>
+                    <th>Word</th>
+                    <th>Your answer</th>
+                    <th>Result</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var result in _lastResults)
+                {
+                    <tr>
+                        <td>@result.AnsweredAt.ToString("dd.MM.yyyy HH:mm")</td>
+                        <td>@result.Mode</td>
+                        <td>@result.English</td>
+                        <td>@result.SelectedAnswer</td>
+                        <td>
+                            @if (result.IsCorrect)
+                            {
+                                <span class="text-success">Correct</span>
+                            }
+                            else
+                            {
+                                <span class="text-danger">
+                                    Wrong, correct: @result.CorrectAnswer
+                                </span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <button class="btn btn-outline-danger mt-3" @onclick="ClearProgressAsync">
+            Clear progress
+        </button>
+    </div>
+}
+
+@code {
+    private List<PracticeResult> _results = new();
+    private List<PracticeResult> _lastResults = new();
+    private List<DifficultWordViewModel> _difficultWords = new();
+
+    private bool _isLoaded;
+
+    private int _totalAnswers;
+    private int _correctAnswers;
+    private int _wrongAnswers;
+    private int _accuracy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadProgressAsync();
+    }
+
+    private async Task LoadProgressAsync()
+    {
+        await PracticeResultService.LoadResultsAsync();
+
+        _results = PracticeResultService.GetResults();
+
+        _totalAnswers = _results.Count;
+        _correctAnswers = _results.Count(result => result.IsCorrect);
+        _wrongAnswers = _results.Count(result => !result.IsCorrect);
+
+        _accuracy = _totalAnswers == 0
+            ? 0
+            : (int)Math.Round((double)_correctAnswers / _totalAnswers * 100);
+
+        _lastResults = _results
+            .OrderByDescending(result => result.AnsweredAt)
+            .Take(10)
+            .ToList();
+
+        _difficultWords = _results
+            .GroupBy(result => new
+            {
+                result.WordId,
+                result.English
+            })
+            .Select(group => new DifficultWordViewModel
+            {
+                WordId = group.Key.WordId,
+                English = group.Key.English,
+                WrongCount = group.Count(result => !result.IsCorrect),
+                TotalCount = group.Count()
+            })
+            .Where(item => item.WrongCount > 0)
+            .OrderByDescending(item => item.WrongCount)
+            .ThenByDescending(item => item.TotalCount)
+            .Take(10)
+            .ToList();
+
+        _isLoaded = true;
+    }
+
+    private async Task ClearProgressAsync()
+    {
+        await PracticeResultService.ClearResultsAsync();
+
+        await LoadProgressAsync();
+    }
+
+    private class DifficultWordViewModel
+    {
+        public int WordId { get; set; }
+
+        public string English { get; set; } = "";
+
+        public int WrongCount { get; set; }
+
+        public int TotalCount { get; set; }
+    }
+}

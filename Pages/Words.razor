@@ -1,0 +1,122 @@
+﻿@page "/words"
+@inject WordService WordService
+
+<PageTitle>My Words</PageTitle>
+
+<h1>My Words</h1>
+
+<h3>Add new word</h3>
+
+<div>
+    <label>English word:</label>
+    <br />
+    <input @bind="_english" />
+</div>
+
+<br />
+
+<div>
+    <label>Ukrainian translation:</label>
+    <br />
+    <input @bind="_ukrainian" />
+</div>
+
+<br />
+
+<div>
+    <label>Example:</label>
+    <br />
+    <input @bind="_example" />
+</div>
+
+<br />
+
+<button class="btn btn-primary" @onclick="AddWord">Add word</button>
+
+<hr />
+
+<h3>Words list</h3>
+
+@if (_words.Count == 0)
+{
+    <p>No words yet.</p>
+}
+else
+{
+    <ul>
+        @foreach (var word in _words)
+        {
+            <li>
+                <strong>@word.English</strong> — @word.Ukrainian
+                <br />
+                <em>@word.Example</em>
+                <br />
+                Correct: @word.CorrectAnswers |
+                Wrong: @word.WrongAnswers |
+                Learned: @word.IsLearned
+
+                <br />
+
+                <button class="btn btn-success btn-sm" @onclick="() => MarkKnown(word.Id)">
+                    I know
+                </button>
+
+                <button class="btn btn-warning btn-sm" @onclick="() => MarkUnknown(word.Id)">
+                    I don't know
+                </button>
+
+                <button class="btn btn-danger btn-sm" @onclick="() => DeleteWord(word.Id)">
+                    Delete
+                </button>
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    private string _english = "";
+    private string _ukrainian = "";
+    private string _example = "";
+
+    private List<WordItem> _words = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await WordService.LoadWordsAsync();
+        _words = WordService.GetWords();
+    }
+
+    private async Task AddWord()
+    {
+        if (string.IsNullOrWhiteSpace(_english) || string.IsNullOrWhiteSpace(_ukrainian))
+        {
+            return;
+        }
+
+        await WordService.AddWordAsync(_english, _ukrainian, _example);
+
+        _english = "";
+        _ukrainian = "";
+        _example = "";
+
+        _words = WordService.GetWords();
+    }
+
+    private async Task MarkKnown(int id)
+    {
+        await WordService.MarkAsKnownAsync(id);
+        _words = WordService.GetWords();
+    }
+
+    private async Task MarkUnknown(int id)
+    {
+        await WordService.MarkAsUnknownAsync(id);
+        _words = WordService.GetWords();
+    }
+
+    private async Task DeleteWord(int id)
+    {
+        await WordService.DeleteWordAsync(id);
+        _words = WordService.GetWords();
+    }
+}

@@ -1,0 +1,491 @@
+﻿@page "/practice"
+@inject WordService WordService
+@inject PracticeResultService PracticeResultService
+
+@using System.Text.RegularExpressions
+
+<PageTitle>Practice</PageTitle>
+<div class="practice-page">
+
+@if (_words.Count < 4)
+{
+    <div class="practice-empty-state">
+        <p>
+            Add at least 4 words to start multiple choice practice.
+        </p>
+
+        <NavLink class="practice-mode-button active" href="words">
+            Go to My Words
+        </NavLink>
+    </div>
+}
+else
+{
+    <div class="practice-header">
+        <div>
+            <p class="practice-label">WordKeeper </p>
+            <h1>Practice</h1>
+            <p class="practice-subtitle">
+                Train your vocabulary with translation and sentence exercises.
+            </p>
+        </div>
+
+        @if (_totalAnswers > 0)
+        {
+            <div class="practice-stats">
+                <div class="practice-stat-card">
+                    <span>Total</span>
+                    <strong>@_totalAnswers</strong>
+                </div>
+
+                <div class="practice-stat-card">
+                    <span>Correct</span>
+                    <strong>@_correctAnswers</strong>
+                </div>
+
+                <div class="practice-stat-card">
+                    <span>Wrong</span>
+                    <strong>@_wrongAnswers</strong>
+                </div>
+
+                <div class="practice-stat-card">
+                    <span>Accuracy</span>
+                    <strong>@_accuracyPercent%</strong>
+                </div>
+            </div>
+        }
+    </div>
+
+    <div class="practice-mode-tabs">
+        <button class="@GetModeButtonClass(PracticeMode.TranslationToEnglish)"
+                @onclick="() => ChangeModeAsync(PracticeMode.TranslationToEnglish)">
+            Translation → English
+        </button>
+
+        <button class="@GetModeButtonClass(PracticeMode.FillInSentence)"
+                @onclick="() => ChangeModeAsync(PracticeMode.FillInSentence)">
+            Fill in the sentence
+        </button>
+    </div>
+
+    @if (_currentMode == PracticeMode.FillInSentence && !_hasSentenceQuestions)
+    {
+        <div class="alert alert-warning" style="max-width: 700px;">
+            There are no words with examples suitable for sentence practice yet.
+
+            <br />
+            <br />
+
+            To use this mode, add an example where the English word appears in the sentence,
+            or mark the hidden part with [[...]].
+
+            <br />
+            <br />
+
+            Example:
+            <br />
+            If you [[stick at]] learning English, you will improve.
+        </div>
+    }
+    else if (_currentWord is not null)
+    {
+        <div class="practice-card">
+            @if (_currentMode == PracticeMode.TranslationToEnglish)
+            {
+                <h4>Choose the English word or phrase:</h4>
+            }
+            else
+            {
+                <h4>Choose the correct word or phrase for the sentence:</h4>
+            }
+
+            <p class="fs-4 mt-3">
+                @_questionText
+            </p>
+
+            <div class="answer-grid">
+                @foreach (var option in _answerOptions)
+                {
+                    <button class="@GetButtonClass(option)"
+                            disabled="@_isAnswered"
+                            @onclick="() => CheckAnswer(option)">
+                        @option
+                    </button>
+                }
+            </div>
+
+            @if (_isAnswered)
+            {
+                <div class="mt-4">
+                    <p>@_resultMessage</p>
+
+                    <p>
+                        <strong>Correct answer:</strong> @_currentWord.English
+                    </p>
+
+                    <p>
+                        <strong>Translation:</strong> @_currentWord.Ukrainian
+                    </p>
+
+                    @if (!string.IsNullOrWhiteSpace(_currentWord.Example))
+                    {
+                        <p>
+                            <strong>Example:</strong>
+                            <em>@GetCleanExample(_currentWord.Example)</em>
+                        </p>
+                    }
+
+                    <button class="btn btn-primary" @onclick="NextQuestionAsync">
+                        Next question
+                    </button>
+                </div>
+            }
+        </div>
+    }
+}
+
+</div>
+@code {
+    private int _totalAnswers;
+    private int _correctAnswers;
+    private int _wrongAnswers;
+    private int _accuracyPercent;
+    private enum PracticeMode
+    {
+        TranslationToEnglish,
+        FillInSentence
+    }
+
+    private List<WordItem> _words = new();
+    private WordItem? _currentWord;
+
+    private PracticeMode _currentMode = PracticeMode.TranslationToEnglish;
+
+    private string _questionText = "";
+    private List<string> _answerOptions = new();
+
+    private bool _isAnswered;
+    private bool _hasSentenceQuestions = true;
+
+    private string _selectedAnswer = "";
+    private string _resultMessage = "";
+    
+    protected override async Task OnInitializedAsync()
+    {
+        await WordService.LoadWordsAsync();
+        await PracticeResultService.LoadResultsAsync();
+       
+        _words = WordService.GetWords();
+        UpdateProgressSummary();
+        if (_words.Count >= 4)
+        {
+            await CreateTranslationQuestionAsync();
+        }
+    }
+
+    private async Task ChangeModeAsync(PracticeMode mode)
+    {
+        _currentMode = mode;
+
+        if (_currentMode == PracticeMode.TranslationToEnglish)
+        {
+            await CreateTranslationQuestionAsync();
+        }
+        else
+        {
+            await CreateSentenceQuestionAsync();
+        }
+    }
+
+private Queue<int> _questionQueue = new();
+
+private PracticeMode? _queueMode;
+
+private string _queueSignature = "";
+
+private int? _lastWordId;
+private string BuildCandidatesSignature(List<WordItem> candidates)
+{
+    return string.Join(
+        "|",
+        candidates
+            .Select(word => word.Id)
+            .OrderBy(id => id)
+    );
+}
+private void RebuildQuestionQueue(
+    List<WordItem> candidates,
+    string currentSignature)
+{
+    List<int> shuffledIds = candidates
+        .Select(word => word.Id)
+        .OrderBy(_ => Random.Shared.Next())
+        .ToList();
+
+    if (_lastWordId.HasValue &&
+        shuffledIds.Count > 1 &&
+        shuffledIds[0] == _lastWordId.Value)
+    {
+        (shuffledIds[0], shuffledIds[1]) = (shuffledIds[1], shuffledIds[0]);
+    }
+
+    _questionQueue = new Queue<int>(shuffledIds);
+
+    _queueMode = _currentMode;
+    _queueSignature = currentSignature;
+}
+private WordItem? ChooseNextWord(List<WordItem> candidates)
+{
+    if (candidates.Count == 0)
+    {
+        return null;
+    }
+
+    string currentSignature = BuildCandidatesSignature(candidates);
+
+    bool shouldRebuildQueue =
+        _questionQueue.Count == 0 ||
+        _queueMode != _currentMode ||
+        _queueSignature != currentSignature;
+
+    if (shouldRebuildQueue)
+    {
+        RebuildQuestionQueue(candidates, currentSignature);
+    }
+
+    int nextWordId = _questionQueue.Dequeue();
+
+    WordItem? selectedWord = candidates.FirstOrDefault(word => word.Id == nextWordId);
+
+    if (selectedWord is null)
+    {
+        return candidates[Random.Shared.Next(candidates.Count)];
+    }
+
+    _lastWordId = selectedWord.Id;
+
+    return selectedWord;
+}
+
+
+    private async Task CreateTranslationQuestionAsync()
+    {
+        ResetQuestionState();
+
+        _hasSentenceQuestions = true;
+
+        _currentWord = ChooseNextWord(_words);
+
+        if (_currentWord is null)
+        {
+            return;
+        }
+
+        _questionText = _currentWord.Ukrainian;
+        _answerOptions = CreateAnswerOptions(_currentWord);
+
+        await Task.CompletedTask;
+    }
+
+    private async Task CreateSentenceQuestionAsync()
+    {
+        ResetQuestionState();
+
+        List<WordItem> wordsWithSentenceQuestions = _words
+            .Where(word => TryCreateSentenceGap(word, out _))
+            .ToList();
+
+        if (wordsWithSentenceQuestions.Count == 0)
+        {
+            _hasSentenceQuestions = false;
+            _currentWord = null;
+            _questionText = "";
+            _answerOptions = new();
+
+            await Task.CompletedTask;
+            return;
+        }
+
+        _hasSentenceQuestions = true;
+
+        _currentWord = ChooseNextWord(wordsWithSentenceQuestions);
+
+        if (_currentWord is null)
+        {
+            return;
+        }
+
+        TryCreateSentenceGap(_currentWord, out string sentenceQuestion);
+
+        _questionText = sentenceQuestion;
+        _answerOptions = CreateAnswerOptions(_currentWord);
+
+        await Task.CompletedTask;
+    }
+
+    private void ResetQuestionState()
+    {
+        _isAnswered = false;
+        _selectedAnswer = "";
+        _resultMessage = "";
+    }
+
+    private List<string> CreateAnswerOptions(WordItem currentWord)
+    {
+        List<string> wrongOptions = _words
+            .Where(word => word.Id != currentWord.Id)
+            .Select(word => word.English)
+            .Where(english => !string.IsNullOrWhiteSpace(english))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(_ => Random.Shared.Next())
+            .Take(3)
+            .ToList();
+
+        wrongOptions.Add(currentWord.English);
+
+        return wrongOptions
+            .OrderBy(_ => Random.Shared.Next())
+            .ToList();
+    }
+
+    private static bool TryCreateSentenceGap(WordItem word, out string sentenceQuestion)
+    {
+        sentenceQuestion = "";
+
+        if (string.IsNullOrWhiteSpace(word.Example))
+        {
+            return false;
+        }
+
+        string example = word.Example.Trim();
+
+        Match markedPart = Regex.Match(example, @"\[\[(.+?)\]\]");
+
+        if (markedPart.Success)
+        {
+            sentenceQuestion = Regex.Replace(example, @"\[\[(.+?)\]\]", "___");
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(word.English))
+        {
+            return false;
+        }
+
+        string result = Regex.Replace(
+            example,
+            Regex.Escape(word.English.Trim()),
+            "___",
+            RegexOptions.IgnoreCase
+        );
+
+        if (result == example)
+        {
+            return false;
+        }
+
+        sentenceQuestion = result;
+        return true;
+    }
+
+    private static string GetCleanExample(string example)
+    {
+        if (string.IsNullOrWhiteSpace(example))
+        {
+            return "";
+        }
+
+        return Regex.Replace(example, @"\[\[(.+?)\]\]", "$1");
+    }
+
+    private async Task CheckAnswer(string selectedOption)
+    {
+        if (_currentWord is null)
+        {
+            return;
+        }
+
+        _selectedAnswer = selectedOption;
+        _isAnswered = true;
+
+        bool isCorrect = selectedOption.Equals(
+            _currentWord.English,
+            StringComparison.OrdinalIgnoreCase
+        );
+
+        if (isCorrect)
+        {
+            _resultMessage = "Correct!";
+            await WordService.MarkAsKnownAsync(_currentWord.Id);
+        }
+        else
+        {
+            _resultMessage = $"Not correct. You selected: {selectedOption}";
+            await WordService.MarkAsUnknownAsync(_currentWord.Id);
+        }
+
+        await PracticeResultService.AddResultAsync(new PracticeResult
+        {
+            WordId = _currentWord.Id,
+            English = _currentWord.English,
+            Mode = _currentMode.ToString(),
+            SelectedAnswer = selectedOption,
+            CorrectAnswer = _currentWord.English,
+            IsCorrect = isCorrect,
+            AnsweredAt = DateTime.Now
+        });
+        UpdateProgressSummary();
+     
+        _words = WordService.GetWords();
+    }
+
+    private async Task NextQuestionAsync()
+    {
+        if (_currentMode == PracticeMode.TranslationToEnglish)
+        {
+            await CreateTranslationQuestionAsync();
+        }
+        else
+        {
+            await CreateSentenceQuestionAsync();
+        }
+    }
+
+    private string GetButtonClass(string option)
+    {
+        if (!_isAnswered)
+        {
+            return "answer-button";
+        }
+
+        if (_currentWord is not null && option == _currentWord.English)
+        {
+            return "answer-button correct";
+        }
+
+        if (option == _selectedAnswer)
+        {
+            return "answer-button wrong";
+        }
+
+        return "answer-button disabled";
+    }
+
+    private string GetModeButtonClass(PracticeMode mode)
+    {
+        if (_currentMode == mode)
+        {
+            return "practice-mode-button active";
+        }
+
+        return "practice-mode-button";
+    }
+    private void UpdateProgressSummary()
+    {
+        _totalAnswers = PracticeResultService.GetTotalAnswersCount();
+        _correctAnswers = PracticeResultService.GetCorrectAnswersCount();
+        _wrongAnswers = PracticeResultService.GetWrongAnswersCount();
+        _accuracyPercent = PracticeResultService.GetAccuracyPercent();
+    }
+    
+}
